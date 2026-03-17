@@ -234,7 +234,63 @@ export async function getCards(listId: string) {
             );
 
             if (matchingCards.length > 0) {
-                return matchingCards;
+                const boardLabels = Array.isArray(boardIncluded.labels)
+                    ? boardIncluded.labels
+                    : [];
+                const boardCardLabels = Array.isArray(boardIncluded.cardLabels)
+                    ? boardIncluded.cardLabels
+                    : [];
+
+                const labelMap = new Map<string, unknown>();
+                for (const label of boardLabels) {
+                    if (label && typeof label === "object" && "id" in label) {
+                        labelMap.set(label.id as string, label);
+                    }
+                }
+
+                const cardLabelMap = new Map<string, string[]>();
+                for (const cardLabel of boardCardLabels) {
+                    if (
+                        cardLabel &&
+                        typeof cardLabel === "object" &&
+                        typeof cardLabel.cardId === "string" &&
+                        typeof cardLabel.labelId === "string"
+                    ) {
+                        const cardId = cardLabel.cardId;
+                        const labelIds = cardLabelMap.get(cardId) || [];
+                        labelIds.push(cardLabel.labelId);
+                        cardLabelMap.set(cardId, labelIds);
+                    }
+                }
+
+                const enrichedCards = matchingCards.map((card) => {
+                    if (
+                        !card ||
+                        typeof card !== "object" ||
+                        !("id" in card)
+                    ) {
+                        return card;
+                    }
+
+                    const cardRecord = card as Record<string, unknown>;
+                    const cardId = cardRecord.id as string;
+                    const cardLabelIds = cardLabelMap.get(cardId) || [];
+                    const labels = cardLabelIds
+                        .map((labelId) => labelMap.get(labelId))
+                        .filter(Boolean);
+
+                    const existingLabelIds = Array.isArray(cardRecord.labelIds)
+                        ? cardRecord.labelIds
+                        : cardLabelIds;
+
+                    return {
+                        ...cardRecord,
+                        labelIds: existingLabelIds,
+                        labels,
+                    };
+                });
+
+                return enrichedCards;
             }
         }
 
