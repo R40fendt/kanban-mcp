@@ -14,7 +14,7 @@ export const PlankaUserSchema = z.object({
 export const PlankaProjectSchema = z.object({
   id: z.string(),
   name: z.string(),
-  background: z.string().nullable(),
+  background: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string().nullable(),
 });
@@ -31,6 +31,15 @@ export const PlankaBoardSchema = z.object({
 export const PlankaListSchema = z.object({
   id: z.string(),
   boardId: z.string(),
+  name: z.string(),
+  position: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string().nullable(),
+});
+
+export const PlankaTaskListSchema = z.object({
+  id: z.string(),
+  cardId: z.string(),
   name: z.string(),
   position: z.number(),
   createdAt: z.string(),
@@ -67,7 +76,7 @@ export const PlankaCardSchema = z.object({
 
 export const PlankaTaskSchema = z.object({
   id: z.string(),
-  cardId: z.string(),
+  taskListId: z.string(),
   name: z.string(),
   isCompleted: z.boolean(),
   position: z.number(),
@@ -106,7 +115,7 @@ export const PlankaBoardMembershipSchema = z.object({
   id: z.string(),
   boardId: z.string(),
   userId: z.string(),
-  role: z.enum(["editor", "admin"]),
+  role: z.enum(["editor", "viewer"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -115,7 +124,7 @@ export const PlankaProjectMembershipSchema = z.object({
   id: z.string(),
   projectId: z.string(),
   userId: z.string(),
-  role: z.enum(["editor", "admin"]),
+  role: z.enum(["editor", "viewer"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -133,6 +142,7 @@ export type PlankaUser = z.infer<typeof PlankaUserSchema>;
 export type PlankaProject = z.infer<typeof PlankaProjectSchema>;
 export type PlankaBoard = z.infer<typeof PlankaBoardSchema>;
 export type PlankaList = z.infer<typeof PlankaListSchema>;
+export type PlankaTaskList = z.infer<typeof PlankaTaskListSchema>;
 export type PlankaLabel = z.infer<typeof PlankaLabelSchema>;
 export type PlankaCard = z.infer<typeof PlankaCardSchema>;
 export type PlankaTask = z.infer<typeof PlankaTaskSchema>;

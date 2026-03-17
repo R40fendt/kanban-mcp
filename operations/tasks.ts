@@ -7,14 +7,14 @@
 
 import { z } from "zod";
 import { plankaRequest } from "../common/utils.js";
-import { PlankaTaskSchema } from "../common/types.js";
+import { PlankaTaskSchema, PlankaTaskListSchema } from "../common/types.js";
 
 // Schema definitions
 /**
  * Schema for creating a new task
  * @property {string} cardId - The ID of the card to create the task in
  * @property {string} name - The name of the task
- * @property {number} [position] - The position of the task in the card (default: 65535)
+ * @property {number} [position] - The position of the task in the task list (default: 65535)
  */
 export const CreateTaskSchema = z.object({
     cardId: z.string().describe("Card ID"),
@@ -41,11 +41,9 @@ export const GetTasksSchema = z.object({
 /**
  * Schema for retrieving a specific task
  * @property {string} id - The ID of the task to retrieve
- * @property {string} [cardId] - The ID of the card containing the task
  */
 export const GetTaskSchema = z.object({
     id: z.string().describe("Task ID"),
-    cardId: z.string().optional().describe("Card ID containing the task"),
 });
 
 /**
@@ -89,6 +87,16 @@ export type BatchCreateTasksOptions = z.infer<typeof BatchCreateTasksSchema>;
 export type UpdateTaskOptions = z.infer<typeof UpdateTaskSchema>;
 
 // Response schemas
+const TaskListsResponseSchema = z.object({
+    items: z.array(PlankaTaskListSchema),
+    included: z.record(z.any()).optional(),
+});
+
+const TaskListResponseSchema = z.object({
+    item: PlankaTaskListSchema,
+    included: z.record(z.any()).optional(),
+});
+
 const TasksResponseSchema = z.object({
     items: z.array(PlankaTaskSchema),
     included: z.record(z.any()).optional(),
@@ -99,8 +107,47 @@ const TaskResponseSchema = z.object({
     included: z.record(z.any()).optional(),
 });
 
-// Map to store task ID to card ID mapping
-const taskCardIdMap: Record<string, string> = {};
+// Cache for card -> task list mapping
+const cardTaskListIdMap: Record<string, string> = {};
+
+async function getTaskListsForCard(cardId: string) {
+    const response = await plankaRequest(`/api/cards/${cardId}`) as {
+        item?: any;
+        included?: {
+            taskLists?: any[];
+        };
+    };
+
+    if (response?.included?.taskLists && Array.isArray(response.included.taskLists)) {
+        return response.included.taskLists;
+    }
+
+    return [];
+}
+
+async function ensureTaskListId(cardId: string): Promise<string> {
+    if (cardTaskListIdMap[cardId]) {
+        return cardTaskListIdMap[cardId];
+    }
+
+    const existingLists = await getTaskListsForCard(cardId);
+    if (existingLists.length > 0) {
+        const taskListId = existingLists[0].id as string;
+        cardTaskListIdMap[cardId] = taskListId;
+        return taskListId;
+    }
+
+    const createResponse = await plankaRequest(
+        `/api/cards/${cardId}/task-lists`,
+        {
+            method: "POST",
+            body: { name: "Tasks", position: 65535 },
+        },
+    );
+    const parsedResponse = TaskListResponseSchema.parse(createResponse);
+    cardTaskListIdMap[cardId] = parsedResponse.item.id;
+    return parsedResponse.item.id;
+}
 
 // Function implementations
 /**
@@ -120,18 +167,14 @@ export async function createTask(params: {
     try {
         const { cardId, name, position = 65535 } = params;
 
+        const taskListId = await ensureTaskListId(cardId);
         const response: any = await plankaRequest(
-            `/api/cards/${cardId}/tasks`,
+            `/api/task-lists/${taskListId}/tasks`,
             {
                 method: "POST",
                 body: { name, position },
             },
         );
-
-        // Store the task ID to card ID mapping for getTask
-        if (response.item && response.item.id) {
-            taskCardIdMap[response.item.id] = cardId;
-        }
 
         return response.item;
     } catch (error) {
@@ -236,24 +279,31 @@ export async function batchCreateTasks(options: BatchCreateTasksOptions) {
  */
 export async function getTasks(cardId: string) {
     try {
-        // Instead of using the tasks endpoint which returns HTML,
-        // we'll get the card details which includes tasks
-        const response = await plankaRequest(`/api/cards/${cardId}`) as {
-            item: any;
-            included?: {
-                tasks?: any[];
-            };
-        };
+        const taskLists = await getTaskListsForCard(cardId);
 
-        // Extract tasks from the card response
-        if (
-            response?.included?.tasks && Array.isArray(response.included.tasks)
-        ) {
-            const tasks = response.included.tasks;
-            return tasks;
+        if (!taskLists.length) {
+            return [];
         }
 
-        return [];
+        const allTasks: any[] = [];
+
+        for (const taskList of taskLists) {
+            const response = await plankaRequest(
+                `/api/task-lists/${taskList.id}/tasks`,
+            );
+
+            try {
+                const parsedResponse = TasksResponseSchema.parse(response);
+                allTasks.push(...parsedResponse.items);
+            } catch (parseError) {
+                if (Array.isArray(response)) {
+                    const items = z.array(PlankaTaskSchema).parse(response);
+                    allTasks.push(...items);
+                }
+            }
+        }
+
+        return allTasks;
     } catch (error) {
         console.error(`Error getting tasks for card ${cardId}:`, error);
         // If there's an error, return an empty array
@@ -265,47 +315,13 @@ export async function getTasks(cardId: string) {
  * Retrieves a specific task by ID
  *
  * @param {string} id - The ID of the task to retrieve
- * @param {string} [cardId] - Optional card ID to help find the task
  * @returns {Promise<object>} The requested task
  */
-export async function getTask(id: string, cardId?: string) {
+export async function getTask(id: string) {
     try {
-        // Tasks in Planka are always part of a card, so we need the card ID
-        const taskCardId = cardId || taskCardIdMap[id];
-
-        if (!taskCardId) {
-            throw new Error(
-                "Card ID is required to get a task. Either provide it directly or create the task first.",
-            );
-        }
-
-        // Get the card details which includes tasks
-        const response = await plankaRequest(`/api/cards/${taskCardId}`) as {
-            item: any;
-            included?: {
-                tasks?: any[];
-            };
-        };
-
-        if (
-            !response?.included?.tasks ||
-            !Array.isArray(response.included.tasks)
-        ) {
-            throw new Error(`Failed to get tasks for card ${taskCardId}`);
-        }
-
-        // Find the task with the matching ID
-        const task = response.included.tasks.find((task: any) =>
-            task.id === id
-        );
-
-        if (!task) {
-            throw new Error(
-                `Task with ID ${id} not found in card ${taskCardId}`,
-            );
-        }
-
-        return task;
+        const response = await plankaRequest(`/api/tasks/${id}`);
+        const parsedResponse = TaskResponseSchema.parse(response);
+        return parsedResponse.item;
     } catch (error) {
         console.error(`Error getting task with ID ${id}:`, error);
         throw new Error(
